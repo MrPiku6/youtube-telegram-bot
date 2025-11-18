@@ -9,7 +9,7 @@ const execPromise = util.promisify(exec);
 // ============================================
 // CONFIGURATION - INSERT YOUR BOT TOKEN HERE
 // ============================================
-const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE';
+const BOT_TOKEN = '8570541890:AAGW_lfhDy0oOqXfD88iJIneEceduGu4rlg';
 
 // Optional: Download limits for free users (set to 0 for unlimited)
 const FREE_DAILY_LIMIT = 5;
