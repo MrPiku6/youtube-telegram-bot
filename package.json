@@ -1,15 +1,15 @@
 {
   "name": "telegram-youtube-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A Telegram bot to download YouTube videos.",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.61.0",
+    "node-telegram-bot-api": "^0.64.0",
     "ytdl-core": "^4.11.5",
-    "ffmpeg-static": "^5.1.0"
+    "ffmpeg-static": "^5.2.0"
   },
   "engines": {
     "node": "18.x"
