@@ -10,10 +10,17 @@
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "ytdl-core": "^4.15.4",
-    "fluent-ffmpeg": "^2.1.2",
-    "https-proxy-agent": "^5.0.0"
+    "fluent-ffmpeg": "^2.1.2"
   },
-  "keywords": ["telegram", "bot", "youtube", "download"],
+  "engines": {
+    "node": "18.x"
+  },
+  "keywords": [
+    "telegram",
+    "bot", 
+    "youtube",
+    "download"
+  ],
   "author": "Your Name",
   "license": "MIT"
 }
