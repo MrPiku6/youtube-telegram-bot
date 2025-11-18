@@ -9,28 +9,35 @@ const execPromise = util.promisify(exec);
 // ============================================
 // CONFIGURATION - INSERT YOUR BOT TOKEN HERE
 // ============================================
-const BOT_TOKEN = '8570541890:AAGW_lfhDy0oOqXfD88iJIneEceduGu4rlg'; // अपना असली टोकन यहाँ डालें
+const BOT_TOKEN = '8570541890:AAGW_lfhDy0oOqXfD88iJIneEceduGu4rlg';
 
-// Optional: Download limits for free users (set to 0 for unlimited)
+// Download limits
 const FREE_DAILY_LIMIT = 5;
 
-// Optional: Your referral/affiliate links for monetization
+// Monetization links
 const REFERRAL_LINK = 'https://your-affiliate-link.com';
 const DONATE_LINK = 'https://your-donation-link.com';
 
 // ============================================
 // INITIALIZE BOT
 // ============================================
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const bot = new TelegramBot(BOT_TOKEN, { 
+  polling: { 
+    interval: 300,
+    autoStart: true,
+    params: {
+      timeout: 10
+    }
+  }
+});
 
-// In-memory storage for user download counts (resets on bot restart)
+// User download tracking
 const userDownloads = {};
 
 // ============================================
-// HELPER FUNCTIONS
+// IMPROVED HELPER FUNCTIONS
 // ============================================
 
-// Reset daily download counts at midnight
 function resetDailyLimits() {
   const now = new Date();
   const night = new Date(
@@ -45,27 +52,25 @@ function resetDailyLimits() {
     Object.keys(userDownloads).forEach(userId => {
       userDownloads[userId].count = 0;
     });
-    resetDailyLimits(); // Schedule next reset
+    console.log('📊 Daily limits reset');
+    resetDailyLimits();
   }, msToMidnight);
 }
 
-// Initialize daily reset
 resetDailyLimits();
 
-// Check if user has reached download limit
 function checkDownloadLimit(userId) {
-  if (FREE_DAILY_LIMIT === 0) return true; // Unlimited
+  if (FREE_DAILY_LIMIT === 0) return true;
   
   if (!userDownloads[userId]) {
     userDownloads[userId] = { count: 0, premium: false };
   }
   
-  if (userDownloads[userId].premium) return true; // Premium users unlimited
+  if (userDownloads[userId].premium) return true;
   
   return userDownloads[userId].count < FREE_DAILY_LIMIT;
 }
 
-// Increment download count
 function incrementDownload(userId) {
   if (!userDownloads[userId]) {
     userDownloads[userId] = { count: 0, premium: false };
@@ -73,7 +78,6 @@ function incrementDownload(userId) {
   userDownloads[userId].count++;
 }
 
-// Get remaining downloads
 function getRemainingDownloads(userId) {
   if (FREE_DAILY_LIMIT === 0) return 'Unlimited';
   if (!userDownloads[userId]) return FREE_DAILY_LIMIT;
@@ -81,12 +85,10 @@ function getRemainingDownloads(userId) {
   return FREE_DAILY_LIMIT - userDownloads[userId].count;
 }
 
-// Sanitize filename
 function sanitizeFilename(filename) {
   return filename.replace(/[^a-z0-9_\-]/gi, '_').substring(0, 100);
 }
 
-// Format file size
 function formatBytes(bytes) {
   if (bytes === 0) return '0 Bytes';
   const k = 1024;
@@ -95,444 +97,565 @@ function formatBytes(bytes) {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
 }
 
-// Delete file safely
 function deleteFile(filePath) {
   try {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      console.log(`Deleted: ${filePath}`);
+      console.log(`🗑️ Deleted: ${filePath}`);
     }
   } catch (error) {
-    console.error(`Error deleting file: ${error.message}`);
+    console.error(`❌ Error deleting file: ${error.message}`);
   }
 }
 
 // ============================================
-// DOWNLOAD FUNCTIONS
+// IMPROVED DOWNLOAD FUNCTIONS
 // ============================================
 
-const YTDL_REQUEST_OPTIONS = {
+const YTDL_OPTIONS = {
+  quality: 'highest',
+  filter: 'audioandvideo',
   requestOptions: {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.101 Safari/537.36',
-      'Cookie': 'CONSENT=YES+cb.20210328-17-p0.en+FX+471'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
   }
 };
 
 async function downloadVideo(url, quality = 'highest') {
-  try {
-    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
-    const title = sanitizeFilename(info.videoDetails.title);
-    const filename = `${title}_${Date.now()}.mp4`;
-    const filePath = path.join(__dirname, filename);
-    
-    return new Promise((resolve, reject) => {
-      const videoStream = ytdl(url, {
-        quality: quality === 'highest' ? 'highestvideo' : 'lowestvideo',
-        filter: 'videoandaudio',
-        ...YTDL_REQUEST_OPTIONS
-      });
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log(`📥 Starting video download: ${url}`);
       
+      const info = await ytdl.getInfo(url);
+      const title = sanitizeFilename(info.videoDetails.title);
+      const filename = `${title}_${Date.now()}.mp4`;
+      const filePath = path.join(__dirname, 'downloads', filename);
+
+      // Ensure downloads directory exists
+      if (!fs.existsSync(path.join(__dirname, 'downloads'))) {
+        fs.mkdirSync(path.join(__dirname, 'downloads'));
+      }
+
+      const videoFormat = ytdl.chooseFormat(info.formats, {
+        quality: quality === 'highest' ? 'highest' : 'lowest',
+        filter: 'audioandvideo'
+      });
+
+      if (!videoFormat) {
+        reject(new Error('No suitable video format found'));
+        return;
+      }
+
+      console.log(`🎬 Selected format: ${videoFormat.qualityLabel}`);
+
+      const videoStream = ytdl.downloadFromInfo(info, { format: videoFormat });
       const writeStream = fs.createWriteStream(filePath);
+
+      let downloadedBytes = 0;
+      let totalBytes = videoFormat.contentLength || 0;
+
+      videoStream.on('data', (chunk) => {
+        downloadedBytes += chunk.length;
+      });
+
       videoStream.pipe(writeStream);
-      
-      videoStream.on('error', (error) => {
-        deleteFile(filePath);
-        reject(error);
-      });
-      
+
       writeStream.on('finish', () => {
-        resolve({ filePath, title: info.videoDetails.title, info });
+        console.log(`✅ Download completed: ${filePath}`);
+        resolve({ 
+          filePath, 
+          title: info.videoDetails.title,
+          duration: info.videoDetails.lengthSeconds,
+          quality: videoFormat.qualityLabel
+        });
       });
-      
+
       writeStream.on('error', (error) => {
+        console.error('❌ Write stream error:', error);
         deleteFile(filePath);
         reject(error);
       });
-    });
-  } catch (error) {
-    throw error;
-  }
+
+      videoStream.on('error', (error) => {
+        console.error('❌ Video stream error:', error);
+        deleteFile(filePath);
+        reject(error);
+      });
+
+      // Timeout after 10 minutes
+      setTimeout(() => {
+        if (!writeStream.closed) {
+          reject(new Error('Download timeout'));
+          videoStream.destroy();
+          writeStream.destroy();
+          deleteFile(filePath);
+        }
+      }, 10 * 60 * 1000);
+
+    } catch (error) {
+      console.error('❌ Download video error:', error);
+      reject(error);
+    }
+  });
 }
 
 async function downloadAudio(url) {
-  try {
-    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
-    const title = sanitizeFilename(info.videoDetails.title);
-    const filename = `${title}_${Date.now()}.mp3`;
-    const filePath = path.join(__dirname, filename);
-    
-    return new Promise((resolve, reject) => {
-      const audioStream = ytdl(url, {
+  return new Promise(async (resolve, reject) => {
+    try {
+      console.log(`🎵 Starting audio download: ${url}`);
+      
+      const info = await ytdl.getInfo(url);
+      const title = sanitizeFilename(info.videoDetails.title);
+      const filename = `${title}_${Date.now()}.mp3`;
+      const filePath = path.join(__dirname, 'downloads', filename);
+
+      // Ensure downloads directory exists
+      if (!fs.existsSync(path.join(__dirname, 'downloads'))) {
+        fs.mkdirSync(path.join(__dirname, 'downloads'));
+      }
+
+      const audioFormat = ytdl.chooseFormat(info.formats, {
         quality: 'highestaudio',
-        filter: 'audioonly',
-        ...YTDL_REQUEST_OPTIONS
+        filter: 'audioonly'
       });
-      
+
+      if (!audioFormat) {
+        reject(new Error('No suitable audio format found'));
+        return;
+      }
+
+      console.log(`🎶 Selected audio format: ${audioFormat.audioBitrate}kbps`);
+
+      const audioStream = ytdl.downloadFromInfo(info, { format: audioFormat });
       const writeStream = fs.createWriteStream(filePath);
+
       audioStream.pipe(writeStream);
-      
-      audioStream.on('error', (error) => {
-        deleteFile(filePath);
-        reject(error);
-      });
-      
+
       writeStream.on('finish', () => {
-        resolve({ filePath, title: info.videoDetails.title, info });
+        console.log(`✅ Audio download completed: ${filePath}`);
+        resolve({ 
+          filePath, 
+          title: info.videoDetails.title,
+          duration: info.videoDetails.lengthSeconds
+        });
       });
-      
+
       writeStream.on('error', (error) => {
+        console.error('❌ Audio write error:', error);
         deleteFile(filePath);
         reject(error);
       });
-    });
-  } catch (error) {
-    throw error;
-  }
+
+      audioStream.on('error', (error) => {
+        console.error('❌ Audio stream error:', error);
+        deleteFile(filePath);
+        reject(error);
+      });
+
+      // Timeout after 10 minutes
+      setTimeout(() => {
+        if (!writeStream.closed) {
+          reject(new Error('Audio download timeout'));
+          audioStream.destroy();
+          writeStream.destroy();
+          deleteFile(filePath);
+        }
+      }, 10 * 60 * 1000);
+
+    } catch (error) {
+      console.error('❌ Download audio error:', error);
+      reject(error);
+    }
+  });
 }
 
 // ============================================
-// BOT COMMANDS ( unchanged... )
+// BOT COMMANDS - IMPROVED
 // ============================================
 
-// /start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const welcomeMessage = `
-🎬 *Welcome to YouTube Downloader Bot!*
+🎬 *YouTube Downloader Bot Started!*
 
-Send me any YouTube link and I'll download it for you!
+*Commands:*
+📥 Send any YouTube link to download
+/video - Download as video
+/audio - Download as MP3
+/stats - Your download stats
+/help - Help guide
 
-*Available Commands:*
-/video - Download video
-/audio - Download audio only
-/quality - Choose video quality
-/stats - Check your download stats
-/help - Show help message
-/premium - Upgrade to premium (unlimited downloads)
+*Limits:* ${FREE_DAILY_LIMIT} downloads/day (free)
+*Premium:* Unlimited downloads
 
-*How to use:*
-1️⃣ Send me a YouTube link
-2️⃣ Choose video or audio
-3️⃣ Wait for download
-4️⃣ Enjoy your content!
+*Quick Start:*
+1. Send YouTube link
+2. Choose format
+3. Download your file!
 
-*Free users:* ${FREE_DAILY_LIMIT === 0 ? 'Unlimited' : FREE_DAILY_LIMIT} downloads per day
-*Premium users:* Unlimited downloads + High quality
-
-💡 Support us: ${DONATE_LINK}
+🔗 ${REFERRAL_LINK}
   `;
   
   bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
 });
 
-// /help command
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const helpMessage = `
-📖 *How to Use This Bot*
+📖 *Bot Help Guide*
 
-*Quick Download:*
-Just send any YouTube link and follow the buttons!
+*How to Download:*
+1. Copy YouTube video URL
+2. Send it to this bot
+3. Choose video or audio
+4. Wait for download
 
-*Commands:*
-/video [link] - Download video
-/audio [link] - Download audio only
-/quality - Set preferred quality
-/stats - Your download statistics
-/premium - Upgrade to premium
+*Supported Links:*
+• https://youtube.com/watch?v=...
+• https://youtu.be/...
+• YouTube shorts
+• YouTube music
 
-*Examples:*
-\`/video https://youtube.com/watch?v=xxxxx\`
-\`/audio https://youtu.be/xxxxx\`
+*File Limits:*
+• Max 50MB per file (Telegram limit)
+• Shorter videos work better
 
-*Tips:*
-• Shorter videos download faster
-• Audio files are smaller than videos
-• Premium users get priority processing
-
-Need help? Contact: @YourSupportUsername
+Need help? Contact support.
   `;
   
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
 
-// /stats command
 bot.onText(/\/stats/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const remaining = getRemainingDownloads(userId);
   
   const statsMessage = `
-📊 *Your Download Statistics*
+📊 *Your Stats*
 
-👤 User ID: \`${userId}\`
-📥 Remaining downloads today: *${remaining}*
-${userDownloads[userId]?.premium ? '⭐ Premium Status: Active' : '🆓 Free User'}
+🆔 User: \`${userId}\`
+📥 Remaining: *${remaining}*
+${userDownloads[userId]?.premium ? '⭐ Premium: Active' : '💎 Premium: Inactive'}
 
-Want unlimited downloads? Use /premium
+Upgrade: /premium
   `;
   
   bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown' });
 });
 
-// /premium command (monetization)
-bot.onText(/\/premium/, (msg) => {
+bot.onText(/\/video(?:\s+(.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const premiumMessage = `
-⭐ *Upgrade to Premium*
+  const userId = msg.from.id;
+  const url = match[1];
 
-*Premium Benefits:*
-✅ Unlimited downloads
-✅ Highest quality videos
-✅ Priority processing
-✅ No ads
-✅ Faster downloads
+  if (!url) {
+    bot.sendMessage(chatId, '❌ Please provide a YouTube URL:\n`/video https://youtube.com/watch?v=...`', { parse_mode: 'Markdown' });
+    return;
+  }
 
-*Pricing:*
-💵 $4.99/month or $39.99/year
+  if (!ytdl.validateURL(url)) {
+    bot.sendMessage(chatId, '❌ Invalid YouTube URL');
+    return;
+  }
 
-Support our development: ${DONATE_LINK}
+  if (!checkDownloadLimit(userId)) {
+    bot.sendMessage(chatId, `⚠️ Daily limit reached (${FREE_DAILY_LIMIT}/day). Try tomorrow or /premium`);
+    return;
+  }
 
-After payment, send receipt to: @YourSupportUsername
-  `;
-  
-  bot.sendMessage(chatId, premiumMessage, { parse_mode: 'Markdown' });
+  // Show quality options
+  const options = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🎥 High Quality', callback_data: `video_high_${Buffer.from(url).toString('base64')}` },
+          { text: '🎥 Low Quality', callback_data: `video_low_${Buffer.from(url).toString('base64')}` }
+        ]
+      ]
+    }
+  };
+
+  bot.sendMessage(chatId, '🎬 Choose video quality:', options);
+});
+
+bot.onText(/\/audio(?:\s+(.+))?/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const url = match[1];
+
+  if (!url) {
+    bot.sendMessage(chatId, '❌ Please provide a YouTube URL:\n`/audio https://youtube.com/watch?v=...`', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (!ytdl.validateURL(url)) {
+    bot.sendMessage(chatId, '❌ Invalid YouTube URL');
+    return;
+  }
+
+  if (!checkDownloadLimit(userId)) {
+    bot.sendMessage(chatId, `⚠️ Daily limit reached (${FREE_DAILY_LIMIT}/day). Try tomorrow or /premium`);
+    return;
+  }
+
+  const options = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🎵 Download MP3', callback_data: `audio_${Buffer.from(url).toString('base64')}` }
+        ]
+      ]
+    }
+  };
+
+  bot.sendMessage(chatId, '🎵 Download as MP3?', options);
 });
 
 // ============================================
-// MAIN MESSAGE HANDLER ( unchanged... )
+// IMPROVED MESSAGE HANDLER
 // ============================================
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const text = msg.text;
-  
-  // Ignore commands
+
+  // Ignore commands and non-text messages
   if (!text || text.startsWith('/')) return;
-  
-  // Check if message contains YouTube link
-  const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([a-zA-Z0-9_-]{11})/;
+
+  // Check for YouTube URL
+  const youtubeRegex = /(https?:\/\/)?(www\.)?(youtube|youtu)\.(com|be)\/(watch\?v=|embed\/|v\/|shorts\/)?([a-zA-Z0-9_-]{11})/;
   const match = text.match(youtubeRegex);
-  
+
   if (!match) {
-    bot.sendMessage(chatId, '❌ Please send a valid YouTube link.\n\nExample: https://youtube.com/watch?v=xxxxx');
+    bot.sendMessage(chatId, '❌ Please send a valid YouTube URL');
     return;
   }
-  
+
   const videoUrl = text.trim();
-  
-  // Validate YouTube URL
+
   if (!ytdl.validateURL(videoUrl)) {
-    bot.sendMessage(chatId, '❌ Invalid YouTube URL. Please send a valid link.');
+    bot.sendMessage(chatId, '❌ Invalid YouTube URL format');
     return;
   }
-  
-  // Check download limit
+
   if (!checkDownloadLimit(userId)) {
-    const limitMessage = `
-⚠️ *Daily Download Limit Reached*
-
-You've reached your daily limit of ${FREE_DAILY_LIMIT} downloads.
-
-*Options:*
-1️⃣ Wait until tomorrow for free downloads
-2️⃣ Upgrade to Premium for unlimited downloads (/premium)
-
-💡 Share with friends: ${REFERRAL_LINK}
-    `;
-    bot.sendMessage(chatId, limitMessage, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, `⚠️ Daily limit reached (${FREE_DAILY_LIMIT}/day). Try tomorrow or /premium`);
     return;
   }
-  
+
   // Show download options
   const options = {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '🎥 Video (High Quality)', callback_data: `video_high_${videoUrl}` },
-          { text: '🎥 Video (Low Quality)', callback_data: `video_low_${videoUrl}` }
+          { text: '🎥 Video (High)', callback_data: `video_high_${Buffer.from(videoUrl).toString('base64')}` },
+          { text: '🎥 Video (Low)', callback_data: `video_low_${Buffer.from(videoUrl).toString('base64')}` }
         ],
         [
-          { text: '🎵 Audio Only (MP3)', callback_data: `audio_${videoUrl}` }
+          { text: '🎵 Audio (MP3)', callback_data: `audio_${Buffer.from(videoUrl).toString('base64')}` }
         ],
         [
-          { text: '📊 Video Info', callback_data: `info_${videoUrl}` }
+          { text: '📊 Video Info', callback_data: `info_${Buffer.from(videoUrl).toString('base64')}` }
         ]
       ]
     }
   };
-  
+
   bot.sendMessage(chatId, '🎬 Choose download option:', options);
 });
 
 // ============================================
-// CALLBACK QUERY HANDLER ( unchanged... )
+// IMPROVED CALLBACK HANDLER
 // ============================================
 
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
   const data = query.data;
-  
-  // Parse callback data
-  const [action, quality, ...urlParts] = data.split('_');
-  const videoUrl = urlParts.join('_');
-  
-  // Answer callback query to remove loading state
-  bot.answerCallbackQuery(query.id);
-  
-  // Handle info request
-  if (action === 'info') {
-    try {
-      const infoMsg = await bot.sendMessage(chatId, '⏳ Fetching video information...');
-      const info = await ytdl.getInfo(quality + '_' + urlParts.join('_'));
+
+  try {
+    await bot.answerCallbackQuery(query.id);
+
+    // Parse callback data
+    const parts = data.split('_');
+    const action = parts[0];
+    const quality = parts[1];
+    const encodedUrl = parts.slice(2).join('_');
+    
+    const videoUrl = Buffer.from(encodedUrl, 'base64').toString();
+
+    console.log(`🔄 Processing: ${action} ${quality} for ${videoUrl}`);
+
+    // Handle info request
+    if (action === 'info') {
+      const infoMsg = await bot.sendMessage(chatId, '📊 Fetching video info...');
       
-      const infoMessage = `
-📹 *Video Information*
+      try {
+        const info = await ytdl.getInfo(videoUrl);
+        const duration = Math.floor(info.videoDetails.lengthSeconds / 60) + ':' + 
+                        (info.videoDetails.lengthSeconds % 60).toString().padStart(2, '0');
+        
+        const infoMessage = `
+📹 *Video Info*
 
 *Title:* ${info.videoDetails.title}
 *Channel:* ${info.videoDetails.author.name}
-*Duration:* ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${(info.videoDetails.lengthSeconds % 60).toString().padStart(2, '0')}
+*Duration:* ${duration}
 *Views:* ${parseInt(info.videoDetails.viewCount).toLocaleString()}
-*Upload Date:* ${info.videoDetails.uploadDate}
+        `;
+        
+        await bot.editMessageText(infoMessage, {
+          chat_id: chatId,
+          message_id: infoMsg.message_id,
+          parse_mode: 'Markdown'
+        });
+      } catch (error) {
+        await bot.editMessageText('❌ Error fetching video info', {
+          chat_id: chatId,
+          message_id: infoMsg.message_id
+        });
+      }
+      return;
+    }
 
-*Description:*
-${info.videoDetails.description.substring(0, 200)}...
-      `;
-      
-      bot.deleteMessage(chatId, infoMsg.message_id);
-      bot.sendMessage(chatId, infoMessage, { parse_mode: 'Markdown' });
-    } catch (error) {
-      bot.sendMessage(chatId, '❌ Error fetching video info: ' + error.message);
+    // Check download limit
+    if (!checkDownloadLimit(userId)) {
+      await bot.sendMessage(chatId, '⚠️ Daily download limit reached');
+      return;
     }
-    return;
-  }
-  
-  // Check download limit again
-  if (!checkDownloadLimit(userId)) {
-    bot.sendMessage(chatId, '⚠️ Daily download limit reached. Try again tomorrow or upgrade to premium! (/premium)');
-    return;
-  }
-  
-  let processingMsg;
-  let filePath;
-  
-  try {
-    // Send processing message
-    processingMsg = await bot.sendMessage(chatId, '⏳ Processing your request...');
-    
-    let result;
-    
-    if (action === 'video') {
-      await bot.editMessageText('📥 Downloading video... This may take a few minutes.', {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
-      });
-      
-      result = await downloadVideo(videoUrl, quality);
-      filePath = result.filePath;
-      
-      const fileSize = fs.statSync(filePath).size;
-      
-      // Telegram has 50MB limit for bots
-      if (fileSize > 50 * 1024 * 1024) {
-        deleteFile(filePath);
-        await bot.editMessageText('❌ File too large! Telegram limits bot uploads to 50MB.\n\nTry:\n• Audio only option\n• Lower quality video', {
+
+    let processingMsg;
+    let filePath;
+
+    try {
+      processingMsg = await bot.sendMessage(chatId, '⏳ Starting download...');
+
+      if (action === 'video') {
+        await bot.editMessageText('📥 Downloading video... (This may take a while)', {
           chat_id: chatId,
           message_id: processingMsg.message_id
         });
-        return;
-      }
-      
-      await bot.editMessageText('📤 Uploading video...', {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
-      });
-      
-      await bot.sendVideo(chatId, filePath, {
-        caption: `🎬 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Like this bot? ${REFERRAL_LINK}`
-      }, { parse_mode: 'Markdown' });
-      
-    } else if (action === 'audio') {
-      await bot.editMessageText('🎵 Downloading audio... Please wait.', {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
-      });
-      
-      result = await downloadAudio(videoUrl);
-      filePath = result.filePath;
-      
-      const fileSize = fs.statSync(filePath).size;
-      
-      if (fileSize > 50 * 1024 * 1024) {
-        deleteFile(filePath);
-        await bot.editMessageText('❌ Audio file too large (>50MB). Try a shorter video.', {
+
+        const result = await downloadVideo(videoUrl, quality);
+        filePath = result.filePath;
+
+        const stats = fs.statSync(filePath);
+        const fileSize = stats.size;
+
+        // Check file size limit
+        if (fileSize > 45 * 1024 * 1024) {
+          deleteFile(filePath);
+          await bot.editMessageText('❌ File too large (>45MB). Try audio or lower quality.', {
+            chat_id: chatId,
+            message_id: processingMsg.message_id
+          });
+          return;
+        }
+
+        await bot.editMessageText('📤 Uploading to Telegram...', {
           chat_id: chatId,
           message_id: processingMsg.message_id
         });
-        return;
+
+        // Send video
+        await bot.sendVideo(chatId, filePath, {
+          caption: `🎬 ${result.title}\n📦 ${formatBytes(fileSize)} | ${result.quality}`,
+          parse_mode: 'Markdown'
+        });
+
+      } else if (action === 'audio') {
+        await bot.editMessageText('🎵 Downloading audio...', {
+          chat_id: chatId,
+          message_id: processingMsg.message_id
+        });
+
+        const result = await downloadAudio(videoUrl);
+        filePath = result.filePath;
+
+        const stats = fs.statSync(filePath);
+        const fileSize = stats.size;
+
+        if (fileSize > 45 * 1024 * 1024) {
+          deleteFile(filePath);
+          await bot.editMessageText('❌ Audio file too large (>45MB)', {
+            chat_id: chatId,
+            message_id: processingMsg.message_id
+          });
+          return;
+        }
+
+        await bot.editMessageText('📤 Uploading audio...', {
+          chat_id: chatId,
+          message_id: processingMsg.message_id
+        });
+
+        // Send audio
+        await bot.sendAudio(chatId, filePath, {
+          caption: `🎵 ${result.title}\n📦 ${formatBytes(fileSize)}`,
+          title: result.title,
+          parse_mode: 'Markdown'
+        });
       }
-      
-      await bot.editMessageText('📤 Uploading audio...', {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
+
+      // Clean up
+      await bot.deleteMessage(chatId, processingMsg.message_id);
+      incrementDownload(userId);
+
+      const remaining = getRemainingDownloads(userId);
+      await bot.sendMessage(chatId, `✅ Download complete!\n📊 Remaining: *${remaining}*`, { 
+        parse_mode: 'Markdown' 
       });
-      
-      await bot.sendAudio(chatId, filePath, {
-        caption: `🎵 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Support us: ${DONATE_LINK}`
-      }, { parse_mode: 'Markdown' });
-    }
-    
-    // Delete processing message
-    await bot.deleteMessage(chatId, processingMsg.message_id);
-    
-    // Increment download count
-    incrementDownload(userId);
-    
-    // Show remaining downloads
-    const remaining = getRemainingDownloads(userId);
-    await bot.sendMessage(chatId, `✅ Download complete!\n📊 Remaining downloads today: *${remaining}*`, { parse_mode: 'Markdown' });
-    
-    // Delete temporary file
-    deleteFile(filePath);
-    
-  } catch (error) {
-    console.error('Download error:', error);
-    
-    if (processingMsg) {
-      await bot.editMessageText(`❌ Download failed: ${error.message}\n\nPlease try again or contact support.`, {
-        chat_id: chatId,
-        message_id: processingMsg.message_id
-      });
-    } else {
-      bot.sendMessage(chatId, `❌ Error: ${error.message}`);
-    }
-    
-    // Clean up file if exists
-    if (filePath) {
+
       deleteFile(filePath);
+
+    } catch (error) {
+      console.error('❌ Download processing error:', error);
+      
+      if (processingMsg) {
+        await bot.editMessageText(`❌ Download failed: ${error.message}`, {
+          chat_id: chatId,
+          message_id: processingMsg.message_id
+        });
+      }
+      
+      if (filePath) {
+        deleteFile(filePath);
+      }
     }
+
+  } catch (error) {
+    console.error('❌ Callback error:', error);
+    await bot.sendMessage(chatId, '❌ Processing error occurred');
   }
 });
 
 // ============================================
-// ERROR HANDLING ( unchanged... )
+// ERROR HANDLING
 // ============================================
 
 bot.on('polling_error', (error) => {
-  console.error('Polling error:', error.code, error.message);
+  console.error('🔴 Polling error:', error.message);
+});
+
+bot.on('webhook_error', (error) => {
+  console.error('🔴 Webhook error:', error.message);
 });
 
 process.on('unhandledRejection', (error) => {
-  console.error('Unhandled rejection:', error);
+  console.error('🔴 Unhandled rejection:', error);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('🔴 Uncaught exception:', error);
 });
 
 // ============================================
-// START BOT ( unchanged... )
+// START BOT
 // ============================================
 
-console.log('🤖 YouTube Downloader Bot is running...');
-console.log('📱 Waiting for messages...');
+console.log('🤖 YouTube Downloader Bot Starting...');
+console.log('📱 Bot is ready and waiting for messages...');
+console.log('💡 Make sure you have stable internet connection');
