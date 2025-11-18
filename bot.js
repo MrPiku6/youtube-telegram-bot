@@ -5,11 +5,12 @@ const path = require('path');
 const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
+const ffmpeg = require('ffmpeg-static');
 
 // ============================================
 // CONFIGURATION - INSERT YOUR BOT TOKEN HERE
 // ============================================
-const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE'; // अपना असली टोकन यहाँ डालें
+const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE';
 
 // Optional: Download limits for free users (set to 0 for unlimited)
 const FREE_DAILY_LIMIT = 5;
@@ -24,6 +25,7 @@ const DONATE_LINK = 'https://your-donation-link.com';
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // In-memory storage for user download counts (resets on bot restart)
+// For persistent storage, use a database like SQLite or MongoDB
 const userDownloads = {};
 
 // ============================================
@@ -83,7 +85,7 @@ function getRemainingDownloads(userId) {
 
 // Sanitize filename
 function sanitizeFilename(filename) {
-  return filename.replace(/[^a-z0-9_\-]/gi, '_').substring(0, 100);
+  return filename.replace(/[^a-zA-Z0-9_\-]/gi, '_').substring(0, 100);
 }
 
 // Format file size
@@ -92,7 +94,7 @@ function formatBytes(bytes) {
   const k = 1024;
   const sizes = ['Bytes', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 // Delete file safely
@@ -111,54 +113,54 @@ function deleteFile(filePath) {
 // DOWNLOAD FUNCTIONS
 // ============================================
 
-const YTDL_REQUEST_OPTIONS = {
-  requestOptions: {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.101 Safari/537.36',
-      'Cookie': 'CONSENT=YES+cb.20210328-17-p0.en+FX+471'
-    }
-  }
-};
-
 async function downloadVideo(url, quality = 'highest') {
   try {
-    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
+    const info = await ytdl.getInfo(url);
     const title = sanitizeFilename(info.videoDetails.title);
-    const filename = `${title}_${Date.now()}.mp4`;
-    const filePath = path.join(__dirname, filename);
     
-    return new Promise((resolve, reject) => {
-      const videoStream = ytdl(url, {
-        quality: quality === 'highest' ? 'highestvideo' : 'lowestvideo',
-        filter: 'videoandaudio',
-        ...YTDL_REQUEST_OPTIONS
-      });
-      
-      const writeStream = fs.createWriteStream(filePath);
-      videoStream.pipe(writeStream);
-      
-      videoStream.on('error', (error) => {
-        deleteFile(filePath);
-        reject(error);
-      });
-      
-      writeStream.on('finish', () => {
-        resolve({ filePath, title: info.videoDetails.title, info });
-      });
-      
-      writeStream.on('error', (error) => {
-        deleteFile(filePath);
-        reject(error);
-      });
+    // Paths for temporary files
+    const audioPath = path.join(__dirname, `${title}_audio.mp4`);
+    const videoPath = path.join(__dirname, `${title}_video.mp4`);
+    const outputPath = path.join(__dirname, `${title}.mp4`);
+
+    // Download audio and video streams separately
+    const audioStream = ytdl(url, { quality: 'highestaudio' });
+    const videoStream = ytdl(url, { quality: quality === 'highest' ? 'highestvideo' : 'lowestvideo' });
+
+    const downloadAudio = new Promise((resolve, reject) => {
+      audioStream.pipe(fs.createWriteStream(audioPath))
+        .on('finish', resolve)
+        .on('error', reject);
     });
+
+    const downloadVideo = new Promise((resolve, reject) => {
+      videoStream.pipe(fs.createWriteStream(videoPath))
+        .on('finish', resolve)
+        .on('error', reject);
+    });
+
+    await Promise.all([downloadAudio, downloadVideo]);
+
+    // Combine audio and video with ffmpeg
+    const ffmpegCommand = `${ffmpeg} -i "${videoPath}" -i "${audioPath}" -c:v copy -c:a aac "${outputPath}"`;
+    await execPromise(ffmpegCommand);
+
+    // Clean up temporary files
+    deleteFile(audioPath);
+    deleteFile(videoPath);
+    
+    return { filePath: outputPath, title: info.videoDetails.title, info };
+
   } catch (error) {
-    throw error;
+    console.error(error); // Log the full error
+    throw new Error('Could not process video. It might be private or region-locked.');
   }
 }
 
+
 async function downloadAudio(url) {
   try {
-    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
+    const info = await ytdl.getInfo(url);
     const title = sanitizeFilename(info.videoDetails.title);
     const filename = `${title}_${Date.now()}.mp3`;
     const filePath = path.join(__dirname, filename);
@@ -166,11 +168,11 @@ async function downloadAudio(url) {
     return new Promise((resolve, reject) => {
       const audioStream = ytdl(url, {
         quality: 'highestaudio',
-        filter: 'audioonly',
-        ...YTDL_REQUEST_OPTIONS
+        filter: 'audioonly'
       });
       
       const writeStream = fs.createWriteStream(filePath);
+      
       audioStream.pipe(writeStream);
       
       audioStream.on('error', (error) => {
@@ -193,7 +195,7 @@ async function downloadAudio(url) {
 }
 
 // ============================================
-// BOT COMMANDS ( unchanged... )
+// BOT COMMANDS (Your existing code is fine)
 // ============================================
 
 // /start command
@@ -302,7 +304,7 @@ After payment, send receipt to: @YourSupportUsername
 });
 
 // ============================================
-// MAIN MESSAGE HANDLER ( unchanged... )
+// MAIN MESSAGE HANDLER
 // ============================================
 
 bot.on('message', async (msg) => {
@@ -310,7 +312,7 @@ bot.on('message', async (msg) => {
   const userId = msg.from.id;
   const text = msg.text;
   
-  // Ignore commands
+  // Ignore commands and non-text messages
   if (!text || text.startsWith('/')) return;
   
   // Check if message contains YouTube link
@@ -324,11 +326,17 @@ bot.on('message', async (msg) => {
   
   const videoUrl = text.trim();
   
-  // Validate YouTube URL
-  if (!ytdl.validateURL(videoUrl)) {
-    bot.sendMessage(chatId, '❌ Invalid YouTube URL. Please send a valid link.');
-    return;
+  // Validate YouTube URL with a try-catch block for more robustness
+  try {
+    if (!ytdl.validateURL(videoUrl)) {
+      bot.sendMessage(chatId, '❌ Invalid YouTube URL. Please send a valid link.');
+      return;
+    }
+  } catch (e) {
+      bot.sendMessage(chatId, '❌ Could not validate the YouTube URL.');
+      return;
   }
+  
   
   // Check download limit
   if (!checkDownloadLimit(userId)) {
@@ -352,14 +360,14 @@ You've reached your daily limit of ${FREE_DAILY_LIMIT} downloads.
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '🎥 Video (High Quality)', callback_data: `video_high_${videoUrl}` },
-          { text: '🎥 Video (Low Quality)', callback_data: `video_low_${videoUrl}` }
+          { text: '🎥 Video (High)', callback_data: `video_highest_${videoUrl}` },
+          { text: '🎥 Video (Low)', callback_data: `video_lowest_${videoUrl}` }
         ],
         [
-          { text: '🎵 Audio Only (MP3)', callback_data: `audio_${videoUrl}` }
+          { text: '🎵 Audio (MP3)', callback_data: `audio_na_${videoUrl}` }
         ],
         [
-          { text: '📊 Video Info', callback_data: `info_${videoUrl}` }
+          { text: '📊 Video Info', callback_data: `info_na_${videoUrl}` }
         ]
       ]
     }
@@ -369,38 +377,40 @@ You've reached your daily limit of ${FREE_DAILY_LIMIT} downloads.
 });
 
 // ============================================
-// CALLBACK QUERY HANDLER ( unchanged... )
+// CALLBACK QUERY HANDLER
 // ============================================
 
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
   const data = query.data;
+  const messageId = query.message.message_id;
   
-  // Parse callback data
+  // Parse callback data: action_quality_url
   const [action, quality, ...urlParts] = data.split('_');
   const videoUrl = urlParts.join('_');
   
   // Answer callback query to remove loading state
   bot.answerCallbackQuery(query.id);
   
+  // Edit the message to show the user what's happening
+  bot.editMessageText('Please wait...', { chat_id: chatId, message_id: messageId });
+
+  
   // Handle info request
   if (action === 'info') {
     try {
       const infoMsg = await bot.sendMessage(chatId, '⏳ Fetching video information...');
-      const info = await ytdl.getInfo(quality + '_' + urlParts.join('_'));
+      const info = await ytdl.getInfo(videoUrl);
       
       const infoMessage = `
 📹 *Video Information*
 
 *Title:* ${info.videoDetails.title}
 *Channel:* ${info.videoDetails.author.name}
-*Duration:* ${Math.floor(info.videoDetails.lengthSeconds / 60)}:${(info.videoDetails.lengthSeconds % 60).toString().padStart(2, '0')}
+*Duration:* ${new Date(info.videoDetails.lengthSeconds * 1000).toISOString().substr(11, 8)}
 *Views:* ${parseInt(info.videoDetails.viewCount).toLocaleString()}
 *Upload Date:* ${info.videoDetails.uploadDate}
-
-*Description:*
-${info.videoDetails.description.substring(0, 200)}...
       `;
       
       bot.deleteMessage(chatId, infoMsg.message_id);
@@ -422,12 +432,12 @@ ${info.videoDetails.description.substring(0, 200)}...
   
   try {
     // Send processing message
-    processingMsg = await bot.sendMessage(chatId, '⏳ Processing your request...');
+    processingMsg = await bot.sendMessage(chatId, '⏳ Processing your request... This may take a moment.');
     
     let result;
     
     if (action === 'video') {
-      await bot.editMessageText('📥 Downloading video... This may take a few minutes.', {
+      await bot.editMessageText('📥 Downloading video... Please be patient.', {
         chat_id: chatId,
         message_id: processingMsg.message_id
       });
@@ -440,7 +450,7 @@ ${info.videoDetails.description.substring(0, 200)}...
       // Telegram has 50MB limit for bots
       if (fileSize > 50 * 1024 * 1024) {
         deleteFile(filePath);
-        await bot.editMessageText('❌ File too large! Telegram limits bot uploads to 50MB.\n\nTry:\n• Audio only option\n• Lower quality video', {
+        await bot.editMessageText('❌ File is too large! Telegram limits bot uploads to 50MB.\n\nTry:\n• The audio-only option\n• A lower quality video', {
           chat_id: chatId,
           message_id: processingMsg.message_id
         });
@@ -453,8 +463,9 @@ ${info.videoDetails.description.substring(0, 200)}...
       });
       
       await bot.sendVideo(chatId, filePath, {
-        caption: `🎬 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Like this bot? ${REFERRAL_LINK}`
-      }, { parse_mode: 'Markdown' });
+        caption: `🎬 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Like this bot? ${REFERRAL_LINK}`,
+        parse_mode: 'Markdown'
+      });
       
     } else if (action === 'audio') {
       await bot.editMessageText('🎵 Downloading audio... Please wait.', {
@@ -469,7 +480,7 @@ ${info.videoDetails.description.substring(0, 200)}...
       
       if (fileSize > 50 * 1024 * 1024) {
         deleteFile(filePath);
-        await bot.editMessageText('❌ Audio file too large (>50MB). Try a shorter video.', {
+        await bot.editMessageText('❌ Audio file is too large (>50MB). Try a shorter video.', {
           chat_id: chatId,
           message_id: processingMsg.message_id
         });
@@ -482,8 +493,9 @@ ${info.videoDetails.description.substring(0, 200)}...
       });
       
       await bot.sendAudio(chatId, filePath, {
-        caption: `🎵 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Support us: ${DONATE_LINK}`
-      }, { parse_mode: 'Markdown' });
+        caption: `🎵 *${result.title}*\n\n📦 Size: ${formatBytes(fileSize)}\n\n💡 Support us: ${DONATE_LINK}`,
+        parse_mode: 'Markdown'
+      });
     }
     
     // Delete processing message
@@ -496,42 +508,41 @@ ${info.videoDetails.description.substring(0, 200)}...
     const remaining = getRemainingDownloads(userId);
     await bot.sendMessage(chatId, `✅ Download complete!\n📊 Remaining downloads today: *${remaining}*`, { parse_mode: 'Markdown' });
     
-    // Delete temporary file
-    deleteFile(filePath);
-    
   } catch (error) {
     console.error('Download error:', error);
     
     if (processingMsg) {
-      await bot.editMessageText(`❌ Download failed: ${error.message}\n\nPlease try again or contact support.`, {
+      await bot.editMessageText(`❌ Download failed: ${error.message}\n\nPlease try a different video or contact support.`, {
         chat_id: chatId,
         message_id: processingMsg.message_id
       });
     } else {
-      bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+      bot.sendMessage(chatId, `❌ An unexpected error occurred: ${error.message}`);
     }
     
-    // Clean up file if exists
-    if (filePath) {
-      deleteFile(filePath);
-    }
+  } finally {
+      // Clean up file if it exists
+      if (filePath) {
+        deleteFile(filePath);
+      }
   }
 });
 
 // ============================================
-// ERROR HANDLING ( unchanged... )
+// ERROR HANDLING
 // ============================================
 
 bot.on('polling_error', (error) => {
-  console.error('Polling error:', error.code, error.message);
+  console.error(`Polling error: ${error.code} - ${error.message}`);
 });
 
-process.on('unhandledRejection', (error) => {
-  console.error('Unhandled rejection:', error);
+process.on('unhandledRejection', (error, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', error);
 });
+
 
 // ============================================
-// START BOT ( unchanged... )
+// START BOT
 // ============================================
 
 console.log('🤖 YouTube Downloader Bot is running...');
