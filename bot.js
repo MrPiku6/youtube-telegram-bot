@@ -9,7 +9,7 @@ const execPromise = util.promisify(exec);
 // ============================================
 // CONFIGURATION - INSERT YOUR BOT TOKEN HERE
 // ============================================
-const BOT_TOKEN = '8570541890:AAGW_lfhDy0oOqXfD88iJIneEceduGu4rlg';
+const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE'; // अपना असली टोकन यहाँ डालें
 
 // Optional: Download limits for free users (set to 0 for unlimited)
 const FREE_DAILY_LIMIT = 5;
@@ -24,7 +24,6 @@ const DONATE_LINK = 'https://your-donation-link.com';
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // In-memory storage for user download counts (resets on bot restart)
-// For persistent storage, use a database like SQLite or MongoDB
 const userDownloads = {};
 
 // ============================================
@@ -112,9 +111,18 @@ function deleteFile(filePath) {
 // DOWNLOAD FUNCTIONS
 // ============================================
 
+const YTDL_REQUEST_OPTIONS = {
+  requestOptions: {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.101 Safari/537.36',
+      'Cookie': 'CONSENT=YES+cb.20210328-17-p0.en+FX+471'
+    }
+  }
+};
+
 async function downloadVideo(url, quality = 'highest') {
   try {
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
     const title = sanitizeFilename(info.videoDetails.title);
     const filename = `${title}_${Date.now()}.mp4`;
     const filePath = path.join(__dirname, filename);
@@ -122,11 +130,11 @@ async function downloadVideo(url, quality = 'highest') {
     return new Promise((resolve, reject) => {
       const videoStream = ytdl(url, {
         quality: quality === 'highest' ? 'highestvideo' : 'lowestvideo',
-        filter: 'videoandaudio'
+        filter: 'videoandaudio',
+        ...YTDL_REQUEST_OPTIONS
       });
       
       const writeStream = fs.createWriteStream(filePath);
-      
       videoStream.pipe(writeStream);
       
       videoStream.on('error', (error) => {
@@ -150,7 +158,7 @@ async function downloadVideo(url, quality = 'highest') {
 
 async function downloadAudio(url) {
   try {
-    const info = await ytdl.getInfo(url);
+    const info = await ytdl.getInfo(url, YTDL_REQUEST_OPTIONS);
     const title = sanitizeFilename(info.videoDetails.title);
     const filename = `${title}_${Date.now()}.mp3`;
     const filePath = path.join(__dirname, filename);
@@ -158,11 +166,11 @@ async function downloadAudio(url) {
     return new Promise((resolve, reject) => {
       const audioStream = ytdl(url, {
         quality: 'highestaudio',
-        filter: 'audioonly'
+        filter: 'audioonly',
+        ...YTDL_REQUEST_OPTIONS
       });
       
       const writeStream = fs.createWriteStream(filePath);
-      
       audioStream.pipe(writeStream);
       
       audioStream.on('error', (error) => {
@@ -185,7 +193,7 @@ async function downloadAudio(url) {
 }
 
 // ============================================
-// BOT COMMANDS
+// BOT COMMANDS ( unchanged... )
 // ============================================
 
 // /start command
@@ -294,7 +302,7 @@ After payment, send receipt to: @YourSupportUsername
 });
 
 // ============================================
-// MAIN MESSAGE HANDLER
+// MAIN MESSAGE HANDLER ( unchanged... )
 // ============================================
 
 bot.on('message', async (msg) => {
@@ -361,7 +369,7 @@ You've reached your daily limit of ${FREE_DAILY_LIMIT} downloads.
 });
 
 // ============================================
-// CALLBACK QUERY HANDLER
+// CALLBACK QUERY HANDLER ( unchanged... )
 // ============================================
 
 bot.on('callback_query', async (query) => {
@@ -511,7 +519,7 @@ ${info.videoDetails.description.substring(0, 200)}...
 });
 
 // ============================================
-// ERROR HANDLING
+// ERROR HANDLING ( unchanged... )
 // ============================================
 
 bot.on('polling_error', (error) => {
@@ -523,7 +531,7 @@ process.on('unhandledRejection', (error) => {
 });
 
 // ============================================
-// START BOT
+// START BOT ( unchanged... )
 // ============================================
 
 console.log('🤖 YouTube Downloader Bot is running...');
