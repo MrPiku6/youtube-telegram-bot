@@ -1,11 +1,10 @@
 {
   "name": "telegram-youtube-bot",
-  "version": "2.0.0", 
-  "description": "A Telegram bot to download YouTube videos and audio",
-  "main": "bot.js",
+  "version": "1.0.0",
+  "description": "Telegram YouTube Downloader Bot",
+  "main": "bot.js", 
   "scripts": {
-    "start": "node bot.js",
-    "dev": "nodemon bot.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
